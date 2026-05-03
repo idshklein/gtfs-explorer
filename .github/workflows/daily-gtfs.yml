@@ -1,4 +1,4 @@
-name: Daily GTFS → Parquet → Netlify
+name: Daily GTFS to Parquet to Netlify
 
 on:
   schedule:
