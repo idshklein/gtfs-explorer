@@ -1,0 +1,2350 @@
+<!DOCTYPE html>
+<html lang="he">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GTFS Explorer — DuckDB WASM Spatial</title>
+  <link rel="icon"
+    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚍</text></svg>" />
+  <!-- importmap must come before any module script -->
+  <script type="importmap">
+  {
+    "imports": {
+      "apache-arrow":       "https://esm.sh/apache-arrow@17",
+      "apache-arrow/":      "https://esm.sh/apache-arrow@17/",
+      "fflate":             "https://esm.sh/fflate"
+    }
+  }
+  </script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #21262d;
+      --accent: #238636;
+      --blue: #58a6ff;
+      --red: #f85149;
+      --yellow: #e3b341;
+      --text: #c9d1d9;
+      --muted: #8b949e;
+    }
+
+    html,
+    body {
+      height: 100%;
+      overflow: hidden;
+    }
+
+    body {
+      font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ──────────────────────────────────── */
+    header {
+      flex-shrink: 0;
+      height: 46px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 10px;
+    }
+
+    header h1 {
+      font-size: 14px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      border: 1px solid;
+      white-space: nowrap;
+    }
+
+    .badge-blue {
+      border-color: #1f6feb;
+      color: var(--blue);
+      background: #0d1e3a;
+    }
+
+    .badge-green {
+      border-color: var(--accent);
+      color: #3fb950;
+      background: #0a1f0a;
+    }
+
+    .badge-yellow {
+      border-color: #9e6a03;
+      color: var(--yellow);
+      background: #2e1f00;
+    }
+
+    #meta-info {
+      font-size: 12px;
+      color: var(--muted);
+      margin-left: auto;
+    }
+
+    /* ── Main layout ─────────────────────────────── */
+    .workspace {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* ── Map pane ────────────────────────────────── */
+    #map-pane {
+      flex: 1;
+      position: relative;
+    }
+
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+
+    #init-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 500;
+      background: rgba(13, 17, 23, 0.92);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+    }
+
+    .spinner {
+      width: 38px;
+      height: 38px;
+      border: 3px solid var(--border);
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .overlay-msg {
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    .overlay-step {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .map-controls {
+      position: absolute;
+      bottom: 28px;
+      left: 10px;
+      z-index: 400;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 12px;
+    }
+
+    .map-controls label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text);
+      cursor: pointer;
+      margin-bottom: 4px;
+    }
+
+    .map-controls label:last-child {
+      margin-bottom: 0;
+    }
+
+    /* ── Side panel ──────────────────────────────── */
+    #side-panel {
+      width: 390px;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .section {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    /* SQL editor */
+    #sql-editor {
+      width: 100%;
+      background: var(--bg);
+      color: #e6edf3;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: 'Cascadia Code', 'Consolas', 'Monaco', monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      resize: vertical;
+      min-height: 115px;
+      max-height: 300px;
+      direction: ltr;
+    }
+
+    #sql-editor:focus {
+      outline: none;
+      border-color: #1f6feb;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .btn {
+      padding: 5px 14px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      transition: filter 0.15s;
+    }
+
+    .btn:hover {
+      filter: brightness(1.15);
+    }
+
+    .btn:active {
+      filter: brightness(0.9);
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn-secondary {
+      background: var(--border);
+      color: var(--text);
+    }
+
+    /* Examples */
+    .examples-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .ex-btn {
+      text-align: right;
+      direction: rtl;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--muted);
+      padding: 5px 8px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: inherit;
+    }
+
+    .ex-btn:hover {
+      background: var(--border);
+      color: var(--text);
+    }
+
+    .ex-btn.spatial {
+      border-color: #1a4020;
+      color: #3fb950;
+    }
+
+    .ex-btn.spatial:hover {
+      background: #0a1f0a;
+    }
+
+    /* Route selector */
+    .route-select {
+      width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 12px;
+      font-family: inherit;
+    }
+
+    .route-select:focus {
+      outline: none;
+      border-color: #1f6feb;
+    }
+
+    .route-info {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 5px;
+      min-height: 14px;
+    }
+
+    .type-badge {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+
+    .type-bus {
+      background: #0a2a0a;
+      color: #3fb950;
+      border: 1px solid #1a4020;
+    }
+
+    .type-rail {
+      background: #0d1e3a;
+      color: var(--blue);
+      border: 1px solid #1f6feb;
+    }
+
+    .type-tram {
+      background: #2a0a1a;
+      color: #f472b6;
+      border: 1px solid #6b2143;
+    }
+
+    .type-ferry {
+      background: #001a2a;
+      color: #38bdf8;
+      border: 1px solid #0369a1;
+    }
+
+    .type-other {
+      background: #1a1a0a;
+      color: var(--yellow);
+      border: 1px solid #6b5b03;
+    }
+
+    /* Bottom results panel */
+    #bottom-panel {
+      flex-shrink: 0;
+      height: 240px;
+      background: var(--surface);
+      border-top: 2px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #bottom-panel-header {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+
+    #bottom-panel-header .section-label {
+      margin: 0;
+    }
+
+    #results-meta {
+      font-size: 11px;
+      color: var(--muted);
+      margin-left: auto;
+    }
+
+    #results-scroll {
+      flex: 1;
+      overflow: auto;
+      padding: 0 4px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+
+    thead th {
+      background: var(--bg);
+      color: var(--blue);
+      padding: 5px 8px;
+      text-align: left;
+      direction: ltr;
+      white-space: nowrap;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      border-bottom: 1px solid var(--border);
+    }
+
+    tbody td {
+      padding: 4px 8px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      max-width: 160px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    tbody tr:hover td {
+      background: rgba(33, 38, 45, 0.8);
+    }
+
+    .null-val {
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    /* Status bar */
+    #status-bar {
+      flex-shrink: 0;
+      height: 24px;
+      background: var(--bg);
+      border-top: 1px solid var(--border);
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    #status-text.loading {
+      color: var(--yellow);
+    }
+
+    #status-text.ok {
+      color: #3fb950;
+    }
+
+    #status-text.err {
+      color: var(--red);
+    }
+
+    /* ── Detail panel (replaces popups) ───────────── */
+    #detail-panel {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      display: none;
+      overflow-y: auto;
+      max-height: 320px;
+      position: relative;
+    }
+
+    #detail-panel.visible {
+      display: block;
+    }
+
+    #detail-close {
+      position: absolute;
+      top: 8px;
+      left: 10px;
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 16px;
+      cursor: pointer;
+      line-height: 1;
+    }
+
+    #detail-close:hover {
+      color: var(--text);
+    }
+
+    #detail-title {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      padding-right: 4px;
+    }
+
+    #detail-body {
+      font-size: 12px;
+      color: var(--text);
+    }
+
+    .detail-row {
+      display: flex;
+      gap: 6px;
+      margin: 3px 0;
+      align-items: flex-start;
+    }
+
+    .detail-key {
+      color: var(--muted);
+      min-width: 80px;
+      flex-shrink: 0;
+    }
+
+    .route-chip {
+      display: inline-block;
+      margin: 2px 2px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      cursor: pointer;
+      background: var(--border);
+      color: var(--text);
+      border: 1px solid var(--border);
+      transition: all 0.12s;
+    }
+
+    .route-chip:hover {
+      background: #2d333b;
+      border-color: var(--blue);
+      color: var(--blue);
+    }
+
+    .error-msg {
+      color: var(--red);
+      font-size: 12px;
+      font-family: monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+      padding: 10px;
+    }
+
+    /* ── Geek / memory details panel ──────────────────── */
+    .geek-details>summary {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 6px 12px;
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+
+    .geek-details>summary:hover {
+      color: var(--text);
+    }
+
+    #mem-panel {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.9;
+      padding: 2px 12px 10px;
+    }
+
+    .mem-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 6px;
+    }
+
+    .mem-key {
+      color: var(--muted);
+    }
+
+    .mem-val {
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+
+    .mem-sep {
+      height: 1px;
+      background: var(--border);
+      margin: 4px 0;
+    }
+  </style>
+</head>
+
+<body>
+
+  <header>
+    <h1>🚍 GTFS Explorer</h1>
+    <span class="badge badge-blue">DuckDB WASM</span>
+    <span class="badge badge-green" id="spatial-badge" style="display:none">Spatial ✓</span>
+    <span class="badge badge-yellow" id="source-badge">GTFS מקומי</span>
+    <span id="meta-info">טוען נתונים...</span>
+    <div style="margin-left:auto;display:flex;gap:6px">
+      <button class="btn btn-primary" id="load-parquet-btn" style="font-size:11px;background:#0d2b0d;color:#3fb950;border:1px solid #238636">
+        ⚡ Parquet Snapshot
+      </button>
+      <button class="btn btn-secondary" id="load-mot-btn" style="font-size:11px">
+        ⬇ MOT Live
+      </button>
+    </div>
+  </header>
+
+  <div class="workspace">
+
+    <!-- Map -->
+    <div id="map-pane">
+      <div id="map"></div>
+
+      <div id="init-overlay">
+        <div class="spinner"></div>
+        <div class="overlay-msg">מאתחל DuckDB WASM</div>
+        <div class="overlay-step" id="overlay-step">טוען...</div>
+      </div>
+
+      <div class="map-controls">
+        <label><input type="checkbox" id="toggle-stops" checked /> תחנות (כחול)</label>
+        <label><input type="checkbox" id="toggle-shapes" checked /> מסלולים (רקע)</label>
+        <label><input type="checkbox" id="toggle-route" checked /> קו נבחר (בהיר)</label>
+        <label><input type="checkbox" id="toggle-query" checked /> שאילתה (אדום)</label>
+      </div>
+    </div>
+
+    <!-- Side panel -->
+    <div id="side-panel">
+
+      <!-- Detail panel — stop or route info -->
+      <div id="detail-panel">
+        <button id="detail-close" title="סגור">✕</button>
+        <div id="detail-title"></div>
+        <div id="detail-body"></div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">SQL Query</div>
+        <textarea id="sql-editor" spellcheck="false">SELECT
+  stop_id,
+  stop_name,
+  stop_lat AS lat,
+  stop_lon AS lon
+FROM stops
+LIMIT 300;</textarea>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="run-btn">▶ הרץ (Ctrl+Enter)</button>
+          <button class="btn btn-secondary" id="clear-btn">נקה מפה</button>
+        </div>
+      </div>
+
+      <div class="section" style="flex-shrink:0">
+        <div class="section-label">בחר קו לתצוגה</div>
+        <select id="route-select" class="route-select">
+          <option value="">-- טוען קווים... --</option>
+        </select>
+        <div id="route-info" class="route-info"></div>
+        <div class="btn-row" style="margin-top:6px">
+          <button class="btn btn-primary" id="show-route-btn" disabled>הצג על מפה</button>
+          <button class="btn btn-secondary" id="reset-route-btn">נקה</button>
+        </div>
+      </div>
+
+      <div class="section" style="flex-shrink:0">
+        <div class="section-label">שאילתות לדוגמה</div>
+        <div class="examples-grid" id="examples-grid"></div>
+      </div>
+
+      <details class="section geek-details" style="flex-shrink:0">
+        <summary class="section-label" style="cursor:pointer;list-style:none;user-select:none">
+          🔧 זיכרון &amp; debug
+        </summary>
+        <div id="mem-panel"></div>
+      </details>
+
+    </div>
+  </div>
+
+  <div id="bottom-panel">
+    <div id="bottom-panel-header">
+      <span class="section-label">תוצאות שאילתה</span>
+      <span id="results-meta"></span>
+    </div>
+    <div id="results-scroll"></div>
+  </div>
+
+  <div id="status-bar">
+    <span id="status-text">מאתחל...</span>
+    <span id="status-right"></span>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script type="module">
+
+    // ═══════════════════════════════════════════════════════════
+    //  Map
+    // ═══════════════════════════════════════════════════════════
+
+    const map = L.map('map', {
+      center: [31.5, 34.9],
+      zoom: 8,
+      renderer: L.canvas({ padding: 0.5 })
+    });
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+      maxZoom: 19
+    }).addTo(map);
+
+    let shapesLayer = L.layerGroup().addTo(map); // replaced with MVT GridLayer after init
+    const stopsLayer = L.layerGroup().addTo(map);
+    const routeHighlightLayer = L.layerGroup().addTo(map);
+    const queryLayer = L.layerGroup().addTo(map);
+
+    document.getElementById('toggle-stops').addEventListener('change', e =>
+      e.target.checked ? map.addLayer(stopsLayer) : map.removeLayer(stopsLayer));
+    document.getElementById('toggle-shapes').addEventListener('change', e =>
+      e.target.checked ? map.addLayer(shapesLayer) : map.removeLayer(shapesLayer));
+    document.getElementById('toggle-route').addEventListener('change', e =>
+      e.target.checked ? map.addLayer(routeHighlightLayer) : map.removeLayer(routeHighlightLayer));
+    document.getElementById('toggle-query').addEventListener('change', e =>
+      e.target.checked ? map.addLayer(queryLayer) : map.removeLayer(queryLayer));
+
+    // ═══════════════════════════════════════════════════════════
+    //  DuckDB WASM
+    // ═══════════════════════════════════════════════════════════
+
+    import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev53.0/dist/duckdb-browser.mjs';
+    import * as fflate from 'fflate';
+
+    let conn = null;
+    let db = null;
+    let spatialOk = false;
+    let hasShapeLines = false; // true after ST_MakeLine shape_lines table is built
+    let hasStopRoutes = false; // true after compact stop_routes table is built
+
+    const setStatus = (msg, cls = '') => {
+      const el = document.getElementById('status-text');
+      el.textContent = msg;
+      el.className = cls;
+    };
+
+    const setStep = msg => { document.getElementById('overlay-step').textContent = msg; };
+
+    async function initDuckDB() {
+      setStep('בוחר bundle...');
+      const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
+
+      setStep('יוצר worker...');
+      const workerUrl = URL.createObjectURL(
+        new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' })
+      );
+      const worker = new Worker(workerUrl);
+      db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
+
+      setStep('מאתחל WASM...');
+      await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      URL.revokeObjectURL(workerUrl);
+
+      conn = await db.connect();
+
+      // ── Spatial extension ──────────────────────────
+      setStep('טוען תוסף spatial...');
+      try {
+        await conn.query('INSTALL spatial; LOAD spatial;');
+        spatialOk = true;
+        document.getElementById('spatial-badge').style.display = '';
+      } catch (e) {
+        console.warn('[spatial] לא נטען:', e.message);
+      }
+
+      // ── Auto-detect: prefer Parquet snapshot, fall back to MOT live ─────
+      const useParquet = await parquetAvailable();
+      if (useParquet) {
+        await loadFromParquet(true);
+      } else {
+        await loadFromMOT(true);
+      }
+
+      document.getElementById('init-overlay').style.display = 'none';
+      setStatus('מוכן', 'ok');
+      applyQS(); // restore state from URL querystring
+    }
+
+    async function plotAllStops() {
+      const result = await conn.query(`
+    SELECT stop_id, stop_name,
+           stop_lat::DOUBLE AS lat,
+           stop_lon::DOUBLE AS lon,
+           zone_id
+    FROM stops
+    WHERE stop_lat IS NOT NULL AND stop_lon IS NOT NULL
+      AND stop_lat::DOUBLE BETWEEN 29 AND 34
+      AND stop_lon::DOUBLE BETWEEN 33 AND 36
+  `);
+      stopsLayer.clearLayers();
+      for (const row of result.toArray()) {
+        const lat = Number(row.lat), lon = Number(row.lon);
+        if (!lat || !lon) continue;
+        const sid = String(row.stop_id ?? '');
+        const name = String(row.stop_name ?? '');
+        L.circleMarker([lat, lon], {
+          radius: 2.5,
+          color: '#4fc3f7', fillColor: '#4fc3f7',
+          fillOpacity: 0.5, weight: 0
+        }).on('click', e => {
+          L.DomEvent.stopPropagation(e);
+          showDetailStop(sid, name, lat, lon);
+        }).addTo(stopsLayer);
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  Shapes & Routes
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * Fetch first maxBytes from url as a Uint8Array,
+     * trimmed to the last newline so no row is cut mid-line.
+     */
+    async function fetchFirstNBytes(url, maxBytes) {
+      const res = await fetch(url);
+      const reader = res.body.getReader();
+      const chunks = [];
+      let total = 0;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        total += value.length;
+        if (total >= maxBytes) { reader.cancel(); break; }
+      }
+      // Merge chunks
+      const combined = new Uint8Array(Math.min(total, maxBytes));
+      let offset = 0;
+      for (const chunk of chunks) {
+        const take = Math.min(chunk.length, combined.length - offset);
+        combined.set(chunk.subarray(0, take), offset);
+        offset += take;
+        if (offset >= combined.length) break;
+      }
+      // Find last \n (0x0a) to avoid cutting mid-line
+      let end = combined.length - 1;
+      while (end > 0 && combined[end] !== 0x0a) end--;
+      return combined.slice(0, end + 1);
+    }
+
+    /** Color a shape by its route_type (passed from trips join) */
+    const ROUTE_TYPE_COLOR = {
+      0: '#f472b6', // tram
+      2: '#60a5fa', // rail
+      3: '#6ee7b7', // bus
+      4: '#38bdf8', // ferry
+    };
+    function routeTypeColor(type) {
+      return ROUTE_TYPE_COLOR[type] ?? '#a78bfa';
+    }
+    function routeTypeLabel(type) {
+      return { 0: 'טרם/רכבל', 2: 'רכבת', 3: 'אוטובוס', 4: 'מעבורת' }[type] ?? `אחר (${type})`;
+    }
+    function routeTypeClass(type) {
+      return { 0: 'tram', 2: 'rail', 3: 'bus', 4: 'ferry' }[type] ?? 'other';
+    }
+
+    /**
+     * Build shape_type lookup table: shape_id → route_type (bus/rail/etc.)
+    /**
+     * Build shape_type + shape_bbox index tables.
+     * shape_bbox stores per-shape lat/lon envelope and max diagonal span
+     * (used for LOD: at low zoom we only show "long" shapes).
+     */
+    async function buildShapeIndex() {
+      await conn.query(`
+    CREATE OR REPLACE TABLE shape_type AS
+    SELECT DISTINCT t.shape_id::VARCHAR AS shape_id,
+                    r.route_type::INTEGER AS route_type
+    FROM trips t
+    JOIN routes r ON r.route_id::VARCHAR = t.route_id::VARCHAR
+    WHERE t.shape_id IS NOT NULL
+  `).catch(async () => {
+        await conn.query(`CREATE TABLE IF NOT EXISTS shape_type (shape_id VARCHAR, route_type INTEGER)`);
+      });
+
+      await conn.query(`
+    CREATE OR REPLACE TABLE shape_bbox AS
+    SELECT
+      shape_id::VARCHAR                                        AS shape_id,
+      MIN(shape_pt_lat::DOUBLE)                                AS lat_min,
+      MAX(shape_pt_lat::DOUBLE)                                AS lat_max,
+      MIN(shape_pt_lon::DOUBLE)                                AS lon_min,
+      MAX(shape_pt_lon::DOUBLE)                                AS lon_max,
+      GREATEST(
+        MAX(shape_pt_lat::DOUBLE) - MIN(shape_pt_lat::DOUBLE),
+        MAX(shape_pt_lon::DOUBLE) - MIN(shape_pt_lon::DOUBLE)
+      )                                                        AS max_span
+    FROM shapes_sample
+    WHERE shape_pt_lat IS NOT NULL AND shape_pt_lon IS NOT NULL
+    GROUP BY shape_id::VARCHAR
+  `);
+    }
+
+    // Pre-computed LOD data: shapeLods[0/1] = Array<{rt,latMin,latMax,lonMin,lonMax,pts:Float32Array}>
+    const shapeLods = [null, null];
+
+    // LOD configuration: zoom 9-10 uses index 0, zoom 11-12 uses index 1,
+    // zoom 13+ is fetched on-demand per tile bbox (_fetchTileShapes)
+    const LOD_CONFIG = [
+      { minSpan: 0.5, simplifyTol: 0.008 }, // LOD 0 — zoom 9-10  (~800m tolerance)
+      { minSpan: 0.05, simplifyTol: 0.001 }, // LOD 1 — zoom 11-12 (~100m tolerance)
+    ];
+
+    // Helper: safe LOD config for any zoom (never undefined)
+    function getLodMinSpan(z) {
+      if (z <= 10) return LOD_CONFIG[0].minSpan;
+      if (z <= 12) return LOD_CONFIG[1].minSpan;
+      return 0;
+    }
+
+    /**
+     * Build shape_lines table: one proper LINESTRING geometry per shape_id.
+     * Uses ST_MakeLine(LIST(...)) for correct ordered assembly, then
+     * ST_Simplify for accurate LOD — much better than every-Nth-point.
+     * Requires spatial extension.
+     */
+    async function buildShapeLines() {
+      if (!spatialOk) return;
+      setStatus('בונה קווים (ST_MakeLine)...', 'loading');
+      await conn.query(`
+    CREATE OR REPLACE TABLE shape_lines AS
+    SELECT
+      s.shape_id::VARCHAR                                    AS shape_id,
+      COALESCE(st.route_type, 3)::INTEGER                    AS route_type,
+      sb.lat_min::DOUBLE  AS lat_min,  sb.lat_max::DOUBLE AS lat_max,
+      sb.lon_min::DOUBLE  AS lon_min,  sb.lon_max::DOUBLE AS lon_max,
+      sb.max_span::DOUBLE AS max_span,
+      ST_MakeLine(
+        LIST(ST_Point(s.shape_pt_lon::DOUBLE, s.shape_pt_lat::DOUBLE)
+             ORDER BY s.shape_pt_sequence::INTEGER)
+      ) AS geom
+    FROM shapes_sample s
+    JOIN shape_bbox sb   ON sb.shape_id   = s.shape_id::VARCHAR
+    LEFT JOIN shape_type st ON st.shape_id = s.shape_id::VARCHAR
+    WHERE s.shape_pt_lat IS NOT NULL AND s.shape_pt_lon IS NOT NULL
+    GROUP BY s.shape_id::VARCHAR, st.route_type,
+             sb.lat_min, sb.lat_max, sb.lon_min, sb.lon_max, sb.max_span
+  `);
+      hasShapeLines = true;
+    }
+
+    /** Parse a GeoJSON LineString string into a Float32Array of [lat, lon, lat, lon, ...] */
+    function _geojsonToLatLonArray(geojsonStr) {
+      if (!geojsonStr) return null;
+      let coords;
+      try { coords = JSON.parse(geojsonStr).coordinates; } catch { return null; }
+      if (!coords || coords.length < 2) return null;
+      const pts = new Float32Array(coords.length * 2);
+      for (let j = 0; j < coords.length; j++) {
+        pts[j * 2] = coords[j][1]; // lat
+        pts[j * 2 + 1] = coords[j][0]; // lon
+      }
+      return pts;
+    }
+
+    /**
+     * Pre-fetch LOD 0 and 1 into in-memory Float32Array arrays.
+     * Uses shape_lines+ST_Simplify when available, falls back to raw CSV points.
+     */
+    async function buildShapeLods() {
+      for (let i = 0; i < 2; i++) {
+        const { minSpan, simplifyTol } = LOD_CONFIG[i];
+        setStatus(`בונה LOD ${i + 1}/2...`, 'loading');
+        shapeLods[i] = [];
+
+        if (hasShapeLines) {
+          // ── Spatial path: ST_Simplify on proper linestrings ──────────────────
+          const result = await conn.query(`
+        SELECT shape_id, route_type AS rt,
+               lat_min, lat_max, lon_min, lon_max,
+               ST_AsGeoJSON(ST_Simplify(geom, ${simplifyTol})) AS geojson
+        FROM shape_lines
+        WHERE max_span >= ${minSpan} AND geom IS NOT NULL
+      `);
+          for (const row of result.toArray()) {
+            const pts = _geojsonToLatLonArray(row.geojson ? String(row.geojson) : null);
+            if (!pts) continue;
+            shapeLods[i].push({
+              rt: Number(row.rt),
+              latMin: Number(row.lat_min), latMax: Number(row.lat_max),
+              lonMin: Number(row.lon_min), lonMax: Number(row.lon_max),
+              pts,
+            });
+          }
+        } else {
+          // ── Fallback: every-Nth-point from raw shapes_sample ─────────────────
+          const step = i === 0 ? 15 : 4;
+          const result = await conn.query(`
+        SELECT s.shape_id::VARCHAR AS sid,
+               s.shape_pt_lat::DOUBLE AS lat, s.shape_pt_lon::DOUBLE AS lon,
+               COALESCE(st.route_type, 3)::INTEGER AS rt,
+               sb.lat_min::DOUBLE AS lat_min, sb.lat_max::DOUBLE AS lat_max,
+               sb.lon_min::DOUBLE AS lon_min, sb.lon_max::DOUBLE AS lon_max
+        FROM shapes_sample s
+        JOIN shape_bbox sb ON sb.shape_id = s.shape_id::VARCHAR
+        LEFT JOIN shape_type st ON st.shape_id = s.shape_id::VARCHAR
+        WHERE sb.max_span >= ${minSpan}
+          AND s.shape_pt_sequence::INTEGER % ${step} = 0
+        ORDER BY sid, s.shape_pt_sequence::INTEGER
+        LIMIT ${i === 0 ? 200000 : 400000}
+      `);
+          const shapeMap = new Map();
+          for (const row of result.toArray()) {
+            const sid = String(row.sid);
+            if (!shapeMap.has(sid)) shapeMap.set(sid, {
+              rt: Number(row.rt),
+              latMin: Number(row.lat_min), latMax: Number(row.lat_max),
+              lonMin: Number(row.lon_min), lonMax: Number(row.lon_max), pts: []
+            });
+            const s = shapeMap.get(sid);
+            s.pts.push(Number(row.lat), Number(row.lon));
+          }
+          for (const s of shapeMap.values()) {
+            if (s.pts.length >= 4)
+              shapeLods[i].push({
+                rt: s.rt, latMin: s.latMin, latMax: s.latMax,
+                lonMin: s.lonMin, lonMax: s.lonMax,
+                pts: new Float32Array(s.pts)
+              });
+          }
+        }
+      }
+    }
+
+    // ── Canvas tile layer — synchronous rendering from in-memory LODs ─────────
+
+    // Pre-parse route type colors into [r,g,b]
+    const _rtColorCache = {};
+    function getRtRgb(rt) {
+      if (!_rtColorCache[rt]) {
+        const h = routeTypeColor(rt);
+        _rtColorCache[rt] = [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+      }
+      return _rtColorCache[rt];
+    }
+
+    /** Convert OSM tile coords to WGS84 lat/lon bounding box */
+    function tileToLatLonBbox(z, x, y) {
+      const n = Math.pow(2, z);
+      return {
+        lonMin: x / n * 360 - 180,
+        lonMax: (x + 1) / n * 360 - 180,
+        latMax: Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI,
+        latMin: Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + 1) / n))) * 180 / Math.PI,
+      };
+    }
+
+    /** Project WGS84 lat/lon → canvas pixel within tile (z, tx, ty) */
+    function latLonToTilePx(lat, lon, z, tx, ty) {
+      const n = Math.pow(2, z);
+      const px = (lon + 180) / 360 * n * 256 - tx * 256;
+      const latRad = lat * Math.PI / 180;
+      const py = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI)
+        / 2 * n * 256 - ty * 256;
+      return [px, py];
+    }
+
+    /** Draw a list of in-memory shapes onto a canvas tile */
+    function _drawShapesOnCanvas(canvas, shapes, z, x, y) {
+      const ctx = canvas.getContext('2d');
+      const n256 = Math.pow(2, z) * 256;
+      const offX = x * 256;
+      const offY = y * 256;
+      const alpha = z >= 13 ? 0.75 : 0.42;
+      ctx.lineWidth = z >= 13 ? 1.8 : 1.0;
+
+      for (const shape of shapes) {
+        const [r, g, b] = getRtRgb(shape.rt);
+        ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
+        ctx.beginPath();
+        const pts = shape.pts;
+        let moved = false;
+        for (let i = 0; i < pts.length; i += 2) {
+          const px = (pts[i + 1] + 180) / 360 * n256 - offX;
+          const lr = pts[i] * 0.017453292519943295;
+          const py = (1 - Math.log(Math.tan(lr) + 1 / Math.cos(lr)) / Math.PI) / 2 * n256 - offY;
+          if (!moved) { ctx.moveTo(px, py); moved = true; } else ctx.lineTo(px, py);
+        }
+        if (moved) ctx.stroke();
+      }
+    }
+
+    /**
+     * Zoom 13+: fetch shapes from DuckDB for this tile's bbox only.
+     * Uses pre-built shape_lines (ST_MakeLine) when available — full-precision
+     * linestrings, fast because it avoids per-row point assembly.
+     * Falls back to raw shapes_sample if shape_lines table isn't ready.
+     */
+    async function _fetchTileShapes(z, x, y) {
+      const { latMin, latMax, lonMin, lonMax } = tileToLatLonBbox(z, x, y);
+      const pad = 0.002;
+      const bLat0 = latMin - pad, bLat1 = latMax + pad;
+      const bLon0 = lonMin - pad, bLon1 = lonMax + pad;
+
+      if (hasShapeLines) {
+        // ── Fast path: pre-built linestrings ────────────────────────────────
+        const result = await conn.query(`
+      SELECT shape_id, route_type AS rt,
+             ST_AsGeoJSON(geom) AS geojson
+      FROM shape_lines
+      WHERE lat_min <= ${bLat1} AND lat_max >= ${bLat0}
+        AND lon_min <= ${bLon1} AND lon_max >= ${bLon0}
+        AND geom IS NOT NULL
+      LIMIT 300
+    `);
+        const shapes = [];
+        for (const row of result.toArray()) {
+          const pts = _geojsonToLatLonArray(row.geojson ? String(row.geojson) : null);
+          if (pts) shapes.push({ rt: Number(row.rt), pts });
+        }
+        return shapes;
+      }
+
+      // ── Fallback: raw point assembly ────────────────────────────────────────
+      const result = await conn.query(`
+    SELECT s.shape_id::VARCHAR AS sid,
+           s.shape_pt_lat::DOUBLE AS lat, s.shape_pt_lon::DOUBLE AS lon,
+           COALESCE(st.route_type, 3)::INTEGER AS rt
+    FROM shapes_sample s
+    JOIN shape_bbox sb ON sb.shape_id = s.shape_id::VARCHAR
+    LEFT JOIN shape_type st ON st.shape_id = s.shape_id::VARCHAR
+    WHERE sb.lat_min <= ${bLat1} AND sb.lat_max >= ${bLat0}
+      AND sb.lon_min <= ${bLon1} AND sb.lon_max >= ${bLon0}
+    ORDER BY sid, s.shape_pt_sequence::INTEGER
+    LIMIT 30000
+  `);
+      const shapeMap = new Map();
+      for (const row of result.toArray()) {
+        const sid = String(row.sid);
+        if (!shapeMap.has(sid)) shapeMap.set(sid, { rt: Number(row.rt), pts: [] });
+        const s = shapeMap.get(sid);
+        s.pts.push(Number(row.lat), Number(row.lon));
+      }
+      const shapes = [];
+      for (const s of shapeMap.values()) {
+        if (s.pts.length >= 4) shapes.push({ rt: s.rt, pts: new Float32Array(s.pts) });
+      }
+      return shapes;
+    }
+
+    function createShapeTileLayer() {
+      const ShapeLayer = L.GridLayer.extend({
+        createTile(coords, done) {
+          const canvas = L.DomUtil.create('canvas', 'leaflet-tile');
+          canvas.width = canvas.height = 256;
+
+          const { z, x, y } = coords;
+
+          if (z < 9) { done(null, canvas); return canvas; }
+
+          // Zoom 13+ : async query for this tile's bbox (avoids pre-fetch cap issues)
+          if (z >= 13) {
+            if (!conn) { done(null, canvas); return canvas; }
+            _fetchTileShapes(z, x, y).then(shapes => {
+              _drawShapesOnCanvas(canvas, shapes, z, x, y);
+              done(null, canvas);
+            }).catch(() => done(null, canvas));
+            return canvas;
+          }
+
+          // Zoom 9-12: synchronous render from pre-fetched LOD arrays
+          const lodIdx = z <= 10 ? 0 : 1;
+          const shapes = shapeLods[lodIdx];
+          if (!shapes || shapes.length === 0) { done(null, canvas); return canvas; }
+
+          const { latMin, latMax, lonMin, lonMax } = tileToLatLonBbox(z, x, y);
+          const padLat = (latMax - latMin) * 0.15;
+          const padLon = (lonMax - lonMin) * 0.15;
+          const bLatMin = latMin - padLat, bLatMax = latMax + padLat;
+          const bLonMin = lonMin - padLon, bLonMax = lonMax + padLon;
+
+          const visibleShapes = shapes.filter(s =>
+            s.latMax >= bLatMin && s.latMin <= bLatMax &&
+            s.lonMax >= bLonMin && s.lonMin <= bLonMax
+          );
+          _drawShapesOnCanvas(canvas, visibleShapes, z, x, y);
+
+          done(null, canvas);
+          return canvas;
+        },
+      });
+
+      return new ShapeLayer({
+        tileSize: 256,
+        minZoom: 9,
+        updateWhenIdle: false,
+        updateWhenZooming: false,
+        keepBuffer: 4,
+      });
+    }
+
+    // ── Map click → detail panel ──────────────────────────────────────────────
+    async function handleMapClick(e) {
+      if (!conn) return;
+      const { lat, lng } = e.latlng;
+      const z = map.getZoom();
+      if (z < 9) return;
+
+      // Tolerance in degrees: ~12 pixels at current zoom, min ~11m, max ~500m
+      const metersPerPx = 40075016.686 / (256 * Math.pow(2, z));
+      const tolDeg = Math.min(0.005, Math.max(0.0001, 12 * metersPerPx / 111320));
+
+      try {
+        let shapeIds;
+
+        if (hasShapeLines && spatialOk) {
+          // ── Precise: ST_DWithin on actual geometry ──────────────────────────
+          // bbox pre-filter avoids full scan, then ST_DWithin checks real distance
+          const res = await conn.query(`
+        SELECT shape_id
+        FROM shape_lines
+        WHERE lat_min <= ${lat + tolDeg} AND lat_max >= ${lat - tolDeg}
+          AND lon_min <= ${lng + tolDeg} AND lon_max >= ${lng - tolDeg}
+          AND geom IS NOT NULL
+          AND ST_DWithin(geom, ST_Point(${lng}::DOUBLE, ${lat}::DOUBLE), ${tolDeg})
+      `);
+          shapeIds = res.toArray().map(r => String(r.shape_id));
+
+        } else if (hasShapeLines) {
+          // ── shape_lines available but no spatial — bbox only ────────────────
+          const res = await conn.query(`
+        SELECT shape_id
+        FROM shape_lines
+        WHERE lat_min <= ${lat + tolDeg} AND lat_max >= ${lat - tolDeg}
+          AND lon_min <= ${lng + tolDeg} AND lon_max >= ${lng - tolDeg}
+          AND max_span >= ${getLodMinSpan(z)}
+        LIMIT 100
+      `);
+          shapeIds = res.toArray().map(r => String(r.shape_id));
+
+        } else {
+          // ── Fallback: match individual CSV points close to click ────────────
+          const res = await conn.query(`
+        SELECT DISTINCT s.shape_id::VARCHAR AS shape_id
+        FROM shapes_sample s
+        WHERE s.shape_pt_lat::DOUBLE BETWEEN ${lat - tolDeg} AND ${lat + tolDeg}
+          AND s.shape_pt_lon::DOUBLE BETWEEN ${lng - tolDeg} AND ${lng + tolDeg}
+        LIMIT 100
+      `);
+          shapeIds = res.toArray().map(r => String(r.shape_id));
+        }
+
+        if (!shapeIds.length) return;
+        await showDetailRoutes(shapeIds, lat, lng);
+      } catch (err) {
+        console.warn('Click query err:', err);
+      }
+    }
+
+    map.on('click', handleMapClick);
+
+    // ── Detail panel helpers ──────────────────────────────────────────────────
+    function openDetailPanel(title, bodyHtml) {
+      document.getElementById('detail-title').innerHTML = title;
+      document.getElementById('detail-body').innerHTML = bodyHtml;
+      document.getElementById('detail-panel').classList.add('visible');
+    }
+
+    function closeDetailPanel() {
+      document.getElementById('detail-panel').classList.remove('visible');
+      updateQS();
+    }
+
+    document.getElementById('detail-close').addEventListener('click', closeDetailPanel);
+
+    async function showDetailStop(stopId, stopName, lat, lon) {
+      updateQS({ stop: stopId });
+
+      // Fetch routes passing through this stop
+      let routesHtml = '<span style="color:var(--muted)">טוען קווים...</span>';
+      openDetailPanel(
+        `<span style="color:#4fc3f7">🚏</span> ${escHtml(stopName)}` +
+        `<span style="color:var(--muted);font-size:11px;margin-right:8px">תחנה ${escHtml(stopId)}</span>`,
+        routesHtml
+      );
+
+      try {
+        const res = await conn.query(`
+      SELECT DISTINCT
+        r.route_id::VARCHAR   AS route_id,
+        r.route_short_name    AS short_name,
+        r.route_long_name     AS long_name,
+        r.route_type::INTEGER AS route_type
+      FROM stop_routes sr
+      JOIN routes r ON r.route_id::VARCHAR = sr.route_id
+      WHERE sr.stop_id = '${stopId.replace(/'/g, "''")}'
+      ORDER BY r.route_short_name
+    `).catch(() => null);
+
+        if (!res) {
+          // stop_routes not loaded — show coordinates only
+          openDetailPanel(
+            `<span style="color:#4fc3f7">🚏</span> ${escHtml(stopName)}`,
+            `<div class="detail-row"><span class="detail-key">מיקום</span> ${lat.toFixed(5)}, ${lon.toFixed(5)}</div>` +
+            `<div style="color:var(--muted);font-size:11px;margin-top:6px">טבלת stop_routes לא טעונה</div>`
+          );
+          return;
+        }
+
+        const rows = res.toArray();
+        const chips = rows.map(row => {
+          const rt = Number(row.route_type);
+          const cls = routeTypeClass(rt);
+          return `<span class="route-chip type-${cls}" ` +
+            `data-route-id="${escHtml(String(row.route_id))}" ` +
+            `title="${escHtml(row.long_name ?? '')}"` +
+            `>${escHtml(row.short_name ?? row.route_id)}</span>`;
+        }).join('');
+
+        openDetailPanel(
+          `<span style="color:#4fc3f7">🚏</span> ${escHtml(stopName)}` +
+          `<span style="color:var(--muted);font-size:11px;margin-right:8px">תחנה ${escHtml(stopId)}</span>`,
+          `<div class="detail-row"><span class="detail-key">מיקום</span>${lat.toFixed(5)}, ${lon.toFixed(5)}</div>` +
+          `<div style="margin-top:8px;font-size:11px;color:var(--muted)">קווים עוברים (${rows.length}):</div>` +
+          `<div style="margin-top:4px">${chips || '<span style="color:var(--muted)">לא נמצאו</span>'}</div>`
+        );
+
+        // Wire up chip clicks → select route
+        document.querySelectorAll('#detail-body .route-chip').forEach(chip => {
+          chip.addEventListener('click', () => {
+            const rid = chip.dataset.routeId;
+            const sel = document.getElementById('route-select');
+            sel.value = rid;
+            if (!sel.value) return;
+            showSelectedRoute();
+            updateQS({ route: rid });
+          });
+        });
+
+      } catch (e) {
+        console.warn('showDetailStop err:', e);
+      }
+    }
+
+    async function showDetailRoutes(shapeIds, lat, lng) {
+      const idList = shapeIds.map(s => `'${s.replace(/'/g, "''")}'`).join(',');
+      try {
+        const res = await conn.query(`
+      SELECT DISTINCT
+        r.route_id::VARCHAR    AS route_id,
+        r.route_short_name     AS short_name,
+        r.route_long_name      AS long_name,
+        r.route_type::INTEGER  AS route_type
+      FROM trips t
+      JOIN routes r ON r.route_id::VARCHAR = t.route_id::VARCHAR
+      WHERE t.shape_id::VARCHAR IN (${idList})
+      ORDER BY r.route_type, r.route_short_name
+    `);
+        const rows = res.toArray();
+        if (!rows.length) return;
+
+        const items = rows.map(row => {
+          const rt = Number(row.route_type);
+          const cls = routeTypeClass(rt);
+          const lbl = routeTypeLabel(rt);
+          return `<div class="detail-row" style="align-items:center">`
+            + `<span class="type-badge type-${cls}" style="font-size:10px">${lbl}</span>`
+            + `<span class="route-chip" data-route-id="${escHtml(String(row.route_id))}" ` +
+            `title="${escHtml(row.long_name ?? '')}">`
+            + `<strong>${escHtml(row.short_name ?? '')}</strong>`
+            + ` <span style="color:var(--muted);font-size:10px">${escHtml((row.long_name ?? '').slice(0, 40))}</span>`
+            + `</span></div>`;
+        }).join('');
+
+        openDetailPanel(
+          `<span>🗺 קווים באזור</span>` +
+          `<span style="color:var(--muted);font-size:11px;margin-right:6px">(${lat.toFixed(4)}, ${lng.toFixed(4)})</span>`,
+          items
+        );
+
+        document.querySelectorAll('#detail-body .route-chip').forEach(chip => {
+          chip.addEventListener('click', () => {
+            const rid = chip.dataset.routeId;
+            const sel = document.getElementById('route-select');
+            sel.value = rid;
+            if (!sel.value) return;
+            showSelectedRoute();
+            updateQS({ route: rid });
+          });
+        });
+
+        updateQS();
+      } catch (e) {
+        console.warn('showDetailRoutes err:', e);
+      }
+    }
+
+    /** Fetch raw WGS84 points for a shape from shapes_sample (used for highlight polylines). */
+    async function getShapePoints(shapeId) {
+      const safe = shapeId.replace(/'/g, "''");
+      const r = await conn.query(`
+    SELECT shape_pt_lat::DOUBLE AS lat, shape_pt_lon::DOUBLE AS lon
+    FROM shapes_sample
+    WHERE shape_id::VARCHAR = '${safe}'
+    ORDER BY shape_pt_sequence::INTEGER
+  `);
+      return r.toArray().map(row => [Number(row.lat), Number(row.lon)]);
+    }
+
+    // ── Polyline fallback (when spatial extension is unavailable) ──────────────
+    async function plotShapesBackground() {
+      // Build shape_id → route_type mapping from trips + routes
+      const typeMap = new Map();
+      try {
+        const tm = await conn.query(`
+      SELECT DISTINCT t.shape_id::VARCHAR AS sid, r.route_type::INTEGER AS rt
+      FROM trips t
+      JOIN routes r ON r.route_id = t.route_id
+      WHERE t.shape_id IS NOT NULL
+    `);
+        for (const row of tm.toArray()) typeMap.set(String(row.sid), Number(row.rt));
+      } catch (e) { console.warn('typeMap error', e); }
+
+      // Render first 4000 distinct shape_ids (ordered by id for determinism)
+      const shapeIds = await conn.query(`
+    SELECT DISTINCT shape_id::VARCHAR AS sid
+    FROM shapes_sample
+    ORDER BY sid
+    LIMIT 4000
+  `);
+      const ids = shapeIds.toArray().map(r => String(r.sid));
+
+      const idList = ids.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
+      const result = await conn.query(`
+    SELECT shape_id::VARCHAR AS sid,
+           shape_pt_lat::DOUBLE  AS lat,
+           shape_pt_lon::DOUBLE  AS lon,
+           shape_pt_sequence::INTEGER AS seq
+    FROM shapes_sample
+    WHERE shape_id::VARCHAR IN (${idList})
+    ORDER BY sid, seq
+  `);
+
+      const groups = new Map();
+      for (const row of result.toArray()) {
+        const sid = String(row.sid);
+        if (!groups.has(sid)) groups.set(sid, []);
+        groups.get(sid).push([Number(row.lat), Number(row.lon)]);
+      }
+
+      shapesLayer.clearLayers();
+      for (const [sid, pts] of groups) {
+        if (pts.length < 2) continue;
+        const rt = typeMap.get(sid);
+        const baseColor = routeTypeColor(rt);
+        const dimColor = hexToRgba(baseColor, 0.28);
+        const pl = L.polyline(pts, { color: dimColor, weight: 1.5, interactive: false });
+        pl.addTo(shapesLayer);
+      }
+      setStatus(`מוכן · ${groups.size.toLocaleString()} shapes מרונדרים`, 'ok');
+    }
+
+    function hexToRgba(hex, alpha) {
+      const r = parseInt(hex.slice(1, 3), 16);
+      const g = parseInt(hex.slice(3, 5), 16);
+      const b = parseInt(hex.slice(5, 7), 16);
+      return `rgba(${r},${g},${b},${alpha})`;
+    }
+
+    async function populateRouteSelector() {
+      const result = await conn.query(`
+    SELECT route_id, route_short_name, route_long_name, route_type
+    FROM routes
+    ORDER BY route_short_name
+  `);
+      const sel = document.getElementById('route-select');
+      sel.innerHTML = '<option value="">-- בחר קו --</option>';
+      for (const row of result.toArray()) {
+        const opt = document.createElement('option');
+        opt.value = String(Number(row.route_id ?? 0));
+        opt.dataset.type = String(Number(row.route_type ?? 3));
+        opt.dataset.name = row.route_short_name ?? '';
+        opt.dataset.longname = row.route_long_name ?? '';
+        opt.textContent = `${row.route_short_name}  —  ${(row.route_long_name ?? '').slice(0, 50)}`;
+        sel.appendChild(opt);
+      }
+      document.getElementById('show-route-btn').disabled = false;
+    }
+
+    async function showSelectedRoute() {
+      const sel = document.getElementById('route-select');
+      const routeId = sel.value;
+      if (!routeId) return;
+      const opt = sel.options[sel.selectedIndex];
+      const routeType = Number(opt.dataset.type ?? 3);
+      const color = routeTypeColor(routeType);
+
+      routeHighlightLayer.clearLayers();
+
+      // Find shape_ids for this route (only those in our sample)
+      const shapeResult = await conn.query(`
+    SELECT DISTINCT t.shape_id::VARCHAR AS sid
+    FROM trips t
+    WHERE t.route_id::VARCHAR = '${routeId}'
+      AND t.shape_id::VARCHAR IN (SELECT DISTINCT shape_id::VARCHAR FROM shapes_sample)
+    LIMIT 10
+  `);
+      const shapeIds = shapeResult.toArray().map(r => String(r.sid));
+
+      if (!shapeIds.length) {
+        document.getElementById('route-info').innerHTML =
+          '<span style="color:var(--red)">מסלול לא נמצא בדוגמה הטעונה</span>';
+        return;
+      }
+
+      // Build highlight polylines
+      const bounds = [];
+      for (const sid of shapeIds) {
+        // getShapePoints queries shapes_sample (WGS84) — works with or without MVT
+        const pts = await getShapePoints(sid);
+        if (pts.length < 2) continue;
+        const pl = L.polyline(pts, { color, weight: 4, opacity: 0.9 });
+        pl.bindPopup(
+          `<b dir="rtl">${escHtml(opt.dataset.name)}</b><br>` +
+          `<span style="font-size:11px">${escHtml(opt.dataset.longname)}</span><br>` +
+          `<span style="font-size:10px;color:#888">shape: ${sid}</span>`
+        );
+        pl.addTo(routeHighlightLayer);
+        bounds.push(...pts);
+      }
+
+      const typeLabel = routeTypeLabel(routeType);
+      const typeCls = routeTypeClass(routeType);
+      document.getElementById('route-info').innerHTML =
+        `<span class="type-badge type-${typeCls}">${typeLabel}</span>` +
+        `<span>${shapeIds.length} shape(s) מוצגים</span>`;
+
+      if (bounds.length) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
+    }
+
+    function resetRoute() {
+      routeHighlightLayer.clearLayers();
+      document.getElementById('route-select').value = '';
+      document.getElementById('route-info').innerHTML = '';
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  Query runner
+    // ═══════════════════════════════════════════════════════════
+
+    async function runQuery(sql) {
+      if (!conn) return;
+      setStatus('מריץ שאילתה...', 'loading');
+      queryLayer.clearLayers();
+      const t0 = performance.now();
+
+      try {
+        const result = await conn.query(sql);
+        const elapsed = Math.round(performance.now() - t0);
+        const cols = result.schema.fields.map(f => f.name);
+        const rows = arrowToObjects(result, cols);
+
+        renderTable(cols, rows);
+
+        // ── Map overlay if lat/lon present ─────────
+        const lower = cols.map(c => c.toLowerCase());
+        const latCol = cols[lower.findIndex(c => c === 'lat' || c === 'stop_lat')];
+        const lonCol = cols[lower.findIndex(c => c === 'lon' || c === 'stop_lon')];
+        const nameCol = cols[lower.findIndex(c => c.includes('name'))];
+
+        if (latCol && lonCol) {
+          const bounds = [];
+          for (const row of rows) {
+            const lat = Number(row[latCol]), lon = Number(row[lonCol]);
+            if (!isFinite(lat) || !isFinite(lon) || lat === 0) continue;
+            bounds.push([lat, lon]);
+            const popupContent =
+              (nameCol ? `<b dir="rtl">${escHtml(String(row[nameCol]))}</b><br>` : '') +
+              Object.entries(row)
+                .filter(([k]) => k !== latCol && k !== lonCol && k !== nameCol)
+                .slice(0, 6)
+                .map(([k, v]) => `<span style="font-size:11px"><b>${escHtml(k)}:</b> ${escHtml(String(v ?? ''))}</span>`)
+                .join('<br>');
+            L.circleMarker([lat, lon], {
+              radius: 6,
+              color: '#f85149', fillColor: '#f85149',
+              fillOpacity: 0.75, weight: 1.5
+            }).bindPopup(popupContent).addTo(queryLayer);
+          }
+          if (bounds.length) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+        }
+
+        document.getElementById('results-meta').textContent =
+          `${rows.length.toLocaleString()} שורות · ${elapsed} ms`;
+        setStatus(`✓ ${rows.length.toLocaleString()} שורות (${elapsed} ms)`, 'ok');
+        document.getElementById('status-right').textContent = cols.join(', ');
+
+      } catch (err) {
+        document.getElementById('results-meta').textContent = '❌ שגיאה';
+        document.getElementById('results-scroll').innerHTML =
+          `<div class="error-msg">${escHtml(err.message)}</div>`;
+        setStatus('שגיאה: ' + err.message.slice(0, 80), 'err');
+        console.error(err);
+      }
+    }
+
+    // ─── Arrow → plain objects ───────────────────────────────
+    function arrowToObjects(result, cols) {
+      return result.toArray().map(row => {
+        const obj = {};
+        for (const col of cols) {
+          const v = row[col];
+          if (v === null || v === undefined) obj[col] = null;
+          else if (typeof v === 'bigint') obj[col] = Number(v);
+          else if (v instanceof Uint8Array) obj[col] = `[binary ${v.length}B]`;
+          else if (typeof v === 'object') obj[col] = v.toString();
+          else obj[col] = v;
+        }
+        return obj;
+      });
+    }
+
+    function renderTable(cols, rows) {
+      if (!rows.length) {
+        document.getElementById('results-scroll').innerHTML =
+          '<div style="padding:12px;color:var(--muted);font-size:12px">אין תוצאות</div>';
+        return;
+      }
+      const display = rows.slice(0, 500);
+      let html = '<table><thead><tr>';
+      for (const c of cols) html += `<th>${escHtml(c)}</th>`;
+      html += '</tr></thead><tbody>';
+      for (const row of display) {
+        html += '<tr>';
+        for (const c of cols) {
+          const v = row[c];
+          if (v === null) html += `<td class="null-val">NULL</td>`;
+          else { const s = escHtml(String(v)); html += `<td title="${s}">${s}</td>`; }
+        }
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      if (rows.length > 500)
+        html += `<div style="padding:6px 8px;color:var(--muted);font-size:11px">` +
+          `מוצגות 500 מתוך ${rows.length.toLocaleString()} שורות</div>`;
+      document.getElementById('results-scroll').innerHTML = html;
+    }
+
+    function escHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // ── Querystring sync ─────────────────────────────────────────────────────
+    // ── Memory panel ──────────────────────────────────────────────────────
+    function updateMemPanel() {
+      const el = document.getElementById('mem-panel');
+      if (!el) return;
+
+      const rows = [];
+
+      const row = (key, val) =>
+        `<div class="mem-row"><span class="mem-key">${key}</span><span class="mem-val">${val}</span></div>`;
+      const sep = () => '<div class="mem-sep"></div>';
+
+      // LOD arrays
+      for (let i = 0; i < shapeLods.length; i++) {
+        const lod = shapeLods[i];
+        if (!lod) { rows.push(row(`LOD ${i}`, 'לא טעון')); continue; }
+        const pts = lod.reduce((a, s) => a + s.pts.length / 2, 0);
+        const mem = lod.reduce((a, s) => a + s.pts.byteLength, 0);
+        rows.push(row(
+          `LOD ${i} (zoom ${i === 0 ? '9-10' : '11-12'})`,
+          `${lod.length.toLocaleString()} קווים · ${Math.round(pts).toLocaleString()} נקודות · ${(mem / 1e6).toFixed(1)} MB`
+        ));
+      }
+
+      rows.push(sep());
+      rows.push(row('שיטת LOD זום 13+', hasShapeLines ? 'shape_lines (ST_MakeLine)' : 'raw shapes_sample'));
+      rows.push(row('Stop→Route lookup', hasStopRoutes ? 'stop_routes ✓' : 'לא זמין'));
+      rows.push(row('גרסת DuckDB WASM', '1.33.1-dev53'));
+      rows.push(row('Spatial extension', spatialOk ? 'טעון ✓' : 'לא זמין'));
+
+      if (hasShapeLines) {
+        conn.query('SELECT COUNT(*) AS n FROM shape_lines').then(r => {
+          const n = Number(r.toArray()[0].n);
+          rows.push(sep());
+          rows.push(row('shape_lines שורות', n.toLocaleString()));
+          el.innerHTML = rows.join('');
+        }).catch(() => { });
+      }
+
+      el.innerHTML = rows.join('');
+    }
+
+    // ── Querystring sync ──────────────────────────────────────────────────────
+    function updateQS(extra = {}) {
+      const c = map.getCenter();
+      const p = new URLSearchParams({
+        lat: c.lat.toFixed(5),
+        lng: c.lng.toFixed(5),
+        z: map.getZoom(),
+        ...extra,
+      });
+      history.replaceState(null, '', '?' + p.toString());
+    }
+
+    function applyQS() {
+      const p = new URLSearchParams(location.search);
+      const lat = parseFloat(p.get('lat')), lng = parseFloat(p.get('lng')), z = parseInt(p.get('z'));
+      if (isFinite(lat) && isFinite(lng)) map.setView([lat, lng], isFinite(z) ? z : map.getZoom());
+      const route = p.get('route'), stop = p.get('stop');
+      if (route) {
+        const sel = document.getElementById('route-select');
+        sel.value = route;
+        if (sel.value) showSelectedRoute();
+      }
+      if (stop) {
+        conn.query(`SELECT stop_id, stop_name, stop_lat::DOUBLE AS lat, stop_lon::DOUBLE AS lon FROM stops WHERE stop_id::VARCHAR='${stop.replace(/'/g, "''")}' LIMIT 1`)
+          .then(r => { const row = r.toArray()[0]; if (row) showDetailStop(String(row.stop_id), String(row.stop_name), Number(row.lat), Number(row.lon)); })
+          .catch(() => { });
+      }
+    }
+
+    map.on('moveend', () => updateQS());
+
+    // ═══════════════════════════════════════════════════════════
+    //  Example queries
+    // ═══════════════════════════════════════════════════════════
+
+    const EXAMPLES = [
+      {
+        label: 'תחנות ראשונות (עם מפה)',
+        sql:
+          `SELECT stop_id, stop_name,
+  stop_lat::DOUBLE AS lat,
+  stop_lon::DOUBLE AS lon
+FROM stops
+LIMIT 300;`
+      },
+      {
+        label: 'ספירות כלליות',
+        sql:
+          `SELECT
+  (SELECT COUNT(*) FROM stops)            AS total_stops,
+  (SELECT COUNT(*) FROM routes)           AS total_routes,
+  (SELECT COUNT(DISTINCT zone_id) FROM stops) AS zones;`
+      },
+      {
+        label: 'תחנות באזור גוש דן',
+        sql:
+          `SELECT stop_id, stop_name,
+  stop_lat::DOUBLE AS lat,
+  stop_lon::DOUBLE AS lon
+FROM stops
+WHERE stop_lat::DOUBLE BETWEEN 31.9 AND 32.3
+  AND stop_lon::DOUBLE BETWEEN 34.7 AND 34.95;`
+      },
+      {
+        label: 'קרובות לירושלים (Haversine)',
+        sql:
+          `SELECT stop_name,
+  stop_lat::DOUBLE AS lat,
+  stop_lon::DOUBLE AS lon,
+  ROUND(
+    6371 * 2 * ASIN(SQRT(
+      POWER(SIN((RADIANS(stop_lat::DOUBLE) - RADIANS(31.7683)) / 2), 2) +
+      COS(RADIANS(31.7683)) * COS(RADIANS(stop_lat::DOUBLE)) *
+      POWER(SIN((RADIANS(stop_lon::DOUBLE) - RADIANS(35.2137)) / 2), 2)
+    )), 3
+  ) AS dist_km
+FROM stops
+ORDER BY dist_km
+LIMIT 25;`
+      },
+      {
+        label: 'קווים לפי סוג',
+        sql:
+          `SELECT
+  CASE route_type
+    WHEN 0 THEN 'טרם / רכבל'
+    WHEN 2 THEN 'רכבת'
+    WHEN 3 THEN 'אוטובוס'
+    WHEN 4 THEN 'מעבורת'
+    ELSE 'אחר (' || route_type || ')'
+  END AS type_name,
+  COUNT(*) AS cnt
+FROM routes
+GROUP BY route_type
+ORDER BY cnt DESC;`
+      },
+      {
+        label: 'קווי רכבת',
+        sql:
+          `SELECT route_short_name, route_long_name, route_desc
+FROM routes
+WHERE route_type = 2
+ORDER BY route_short_name::INTEGER;`
+      },
+      {
+        label: 'תחנות לפי zone_id',
+        sql:
+          `SELECT zone_id, COUNT(*) AS stop_count
+FROM stops
+GROUP BY zone_id
+ORDER BY stop_count DESC
+LIMIT 20;`
+      },
+      {
+        label: 'תחנות בצפון (lat > 32.8)',
+        sql:
+          `SELECT stop_id, stop_name,
+  stop_lat::DOUBLE AS lat,
+  stop_lon::DOUBLE AS lon
+FROM stops
+WHERE stop_lat::DOUBLE > 32.8
+ORDER BY stop_lat::DOUBLE DESC
+LIMIT 200;`
+      },
+      {
+        label: 'סכמת טבלאות',
+        sql:
+          `SELECT table_name, column_name, data_type
+FROM information_schema.columns
+WHERE table_schema = 'main'
+ORDER BY table_name, ordinal_position;`
+      },
+    ];
+
+    const SPATIAL_EXAMPLES = [
+      {
+        label: '★ ST_Distance — קרובות לת"א',
+        sql:
+          `SELECT stop_name,
+  stop_lat::DOUBLE AS lat,
+  stop_lon::DOUBLE AS lon,
+  ROUND(
+    ST_Distance(
+      ST_Transform(ST_Point(stop_lon::DOUBLE, stop_lat::DOUBLE), 'EPSG:4326', 'EPSG:32636'),
+      ST_Transform(ST_Point(34.7818, 32.0853),                  'EPSG:4326', 'EPSG:32636')
+    ) / 1000, 3
+  ) AS dist_km
+FROM stops
+WHERE stop_lat IS NOT NULL
+ORDER BY dist_km
+LIMIT 30;`
+      },
+      {
+        label: '★ Bounding box של כל התחנות',
+        sql:
+          `SELECT
+  ST_AsText(
+    ST_Envelope(
+      ST_Collect(ST_Point(stop_lon::DOUBLE, stop_lat::DOUBLE))
+    )
+  ) AS bbox
+FROM stops
+WHERE stop_lat IS NOT NULL;`
+      },
+      {
+        label: '★ תחנות ב-2km מתל אביב',
+        sql:
+          `SELECT stop_name,
+  stop_lat::DOUBLE AS lat,
+  stop_lon::DOUBLE AS lon
+FROM stops
+WHERE ST_DWithin(
+  ST_Transform(ST_Point(stop_lon::DOUBLE, stop_lat::DOUBLE), 'EPSG:4326', 'EPSG:32636'),
+  ST_Transform(ST_Point(34.7818, 32.0853),                  'EPSG:4326', 'EPSG:32636'),
+  2000
+);`
+      },
+    ];
+
+    function buildExamples() {
+      const grid = document.getElementById('examples-grid');
+      for (const ex of EXAMPLES) {
+        const btn = document.createElement('button');
+        btn.className = 'ex-btn';
+        btn.textContent = ex.label;
+        btn.addEventListener('click', () => {
+          document.getElementById('sql-editor').value = ex.sql;
+          runQuery(ex.sql);
+        });
+        grid.appendChild(btn);
+      }
+    }
+
+    function addSpatialExamples() {
+      const grid = document.getElementById('examples-grid');
+      const sep = document.createElement('div');
+      sep.style.cssText = 'font-size:10px;color:var(--muted);padding:4px 2px;border-top:1px solid var(--border);margin-top:2px;';
+      sep.textContent = '— Spatial Extension —';
+      grid.appendChild(sep);
+      for (const ex of SPATIAL_EXAMPLES) {
+        const btn = document.createElement('button');
+        btn.className = 'ex-btn spatial';
+        btn.textContent = ex.label;
+        btn.addEventListener('click', () => {
+          document.getElementById('sql-editor').value = ex.sql;
+          runQuery(ex.sql);
+        });
+        grid.appendChild(btn);
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  Event listeners
+    // ═══════════════════════════════════════════════════════════
+
+    document.getElementById('run-btn').addEventListener('click', () =>
+      runQuery(document.getElementById('sql-editor').value));
+
+    document.getElementById('clear-btn').addEventListener('click', () => {
+      queryLayer.clearLayers();
+      document.getElementById('results-scroll').innerHTML = '';
+      document.getElementById('results-meta').textContent = '';
+      document.getElementById('status-right').textContent = '';
+    });
+
+    document.getElementById('sql-editor').addEventListener('keydown', e => {
+      if (e.ctrlKey && e.key === 'Enter') {
+        e.preventDefault();
+        runQuery(document.getElementById('sql-editor').value);
+      }
+    });
+
+    document.getElementById('load-mot-btn').addEventListener('click', loadFromMOT);
+    document.getElementById('load-parquet-btn').addEventListener('click', loadFromParquet);
+
+    async function loadFromMOT(initMode = false) {
+      if (!conn) return;
+      const btn = document.getElementById('load-mot-btn');
+      if (!initMode) { btn.disabled = true; btn.textContent = 'מוריד...'; }
+      setStatus('מתחבר ל-MOT...', 'loading');
+      try {
+        const MOT_ZIP = 'https://gtfs.mot.gov.il/gtfsfiles/israel-public-transportation.zip';
+        // On localhost use the serve.js proxy; on Netlify use the edge function
+        const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+        const proxyUrl = isLocal ? `http://localhost:3000/proxy?url=${encodeURIComponent(MOT_ZIP)}` : '/mot-proxy';
+
+        // ── 1. Download ZIP with progress ──────────────────────────────────────
+        setStatus('מוריד ZIP מ-MOT (עשרות MB)...', 'loading');
+        const res = await fetch(proxyUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const total = Number(res.headers.get('content-length') || 0);
+        const reader = res.body.getReader();
+        const chunks = [];
+        let downloaded = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          downloaded += value.length;
+          const mb = (downloaded / 1e6).toFixed(1);
+          const pct = total ? ` (${Math.round(downloaded / total * 100)}%)` : '';
+          setStatus(`מוריד ZIP: ${mb} MB${pct}`, 'loading');
+        }
+        const zipBuf = new Uint8Array(downloaded);
+        let off = 0;
+        for (const c of chunks) { zipBuf.set(c, off); off += c.length; }
+
+        // ── 2. Stream-extract files from ZIP ──────────────────────────────────
+        // shapes.txt:     ~500 MB uncompressed — cap to 20 MB
+        // stop_times.txt: ~1 GB uncompressed — cap to 25 MB; we extract only a
+        //   representative sample (one trip per route) and immediately compact it.
+        const MAX_SHAPES = 20 * 1024 * 1024;
+        const MAX_STOP_TIMES = 25 * 1024 * 1024;
+        const LIMITS = {
+          'stops.txt': null,
+          'routes.txt': null,
+          'trips.txt': null,
+          'shapes.txt': MAX_SHAPES,
+          'stop_times.txt': MAX_STOP_TIMES,
+        };
+
+        setStatus('פורק קבצים מ-ZIP...', 'loading');
+        const extracted = await streamExtractZip(zipBuf, LIMITS, name =>
+          setStatus(`פורק ${name}...`, 'loading')
+        );
+
+        // ── 3. Register each file in DuckDB virtual FS ────────────────────────
+        for (const [name, data] of Object.entries(extracted)) {
+          setStatus(`רושם ${name} (${(data.length / 1e6).toFixed(1)} MB)...`, 'loading');
+          await db.registerFileBuffer(name, data);
+        }
+
+        // ── 4. Load tables ─────────────────────────────────────────────────────
+        const load = async (tbl, file, extra = '') => {
+          setStatus(`טוען ${file}...`, 'loading');
+          await conn.query(`DROP TABLE IF EXISTS ${tbl}`);
+          await conn.query(
+            `CREATE TABLE ${tbl} AS SELECT * FROM read_csv('${file}', header=true, ignore_errors=true${extra})`
+          );
+        };
+
+        await load('stops', 'stops.txt');
+        await load('routes', 'routes.txt');
+        await load('trips', 'trips.txt');
+        if (extracted['shapes.txt']) {
+          await load('shapes_sample', 'shapes.txt', ', strict_mode=false');
+        }
+
+        // stop_times: load raw CSV, compact into stop_routes, then drop raw table
+        hasStopRoutes = false;
+        if (extracted['stop_times.txt']) {
+          setStatus('בונה stop_routes (trip אחד לקו)...', 'loading');
+          if (initMode) setStep('בונה stop_routes...');
+
+          // One representative trip per route (earliest trip_id alphabetically)
+          await conn.query(`
+        CREATE OR REPLACE TABLE rep_trips AS
+        SELECT route_id::VARCHAR AS route_id,
+               MIN(trip_id::VARCHAR) AS trip_id
+        FROM trips
+        GROUP BY route_id::VARCHAR
+      `);
+
+          // Load the capped stop_times CSV
+          await load('stop_times_raw', 'stop_times.txt', ', strict_mode=false');
+
+          // Build compact (stop_id, route_id) lookup using only rep trips
+          await conn.query(`
+        CREATE OR REPLACE TABLE stop_routes AS
+        SELECT DISTINCT
+          st.stop_id::VARCHAR   AS stop_id,
+          rt.route_id           AS route_id
+        FROM stop_times_raw st
+        JOIN rep_trips rt ON rt.trip_id = st.trip_id::VARCHAR
+      `);
+
+          // Free raw stop_times and rep_trips from WASM memory
+          await conn.query('DROP TABLE IF EXISTS stop_times_raw');
+          await conn.query('DROP TABLE IF EXISTS rep_trips');
+          await db.dropFile('stop_times.txt').catch(() => { });
+
+          hasStopRoutes = true;
+        }
+
+        const stopCnt = Number((await conn.query('SELECT COUNT(*) AS n FROM stops')).toArray()[0].n);
+        const routeCnt = Number((await conn.query('SELECT COUNT(*) AS n FROM routes')).toArray()[0].n);
+        let stopRoutesCnt = 0;
+        if (hasStopRoutes) {
+          stopRoutesCnt = Number((await conn.query('SELECT COUNT(*) AS n FROM stop_routes')).toArray()[0].n);
+        }
+        document.getElementById('meta-info').textContent =
+          `${stopCnt.toLocaleString()} תחנות · ${routeCnt.toLocaleString()} קווים` +
+          (hasStopRoutes ? ` · ${stopRoutesCnt.toLocaleString()} stop-route pairs` : ' · stop_routes לא טעון');
+        document.getElementById('source-badge').textContent = 'MOT Live';
+        document.getElementById('source-badge').style.background = '#0a1f2a';
+        document.getElementById('source-badge').style.color = '#38bdf8';
+        document.getElementById('source-badge').style.borderColor = '#0369a1';
+
+        // ── 5. Refresh map ─────────────────────────────────────────────────────
+        stopsLayer.clearLayers();
+        routeHighlightLayer.clearLayers();
+
+        // Build shape_type lookup, then swap in canvas tile layer
+        hasShapeLines = false; // reset on each reload
+        if (extracted['shapes.txt']) {
+          setStatus('בונה אינדקס shapes...', 'loading');
+          if (initMode) setStep('בונה אינדקס shapes...');
+          await buildShapeIndex();
+
+          if (spatialOk) {
+            setStatus('בונה קווים עם ST_MakeLine...', 'loading');
+            if (initMode) setStep('בונה קווים (ST_MakeLine)...');
+            await buildShapeLines();
+          }
+
+          setStatus('טוען LOD לזיכרון...', 'loading');
+          if (initMode) setStep('טוען LOD לזיכרון...');
+          await buildShapeLods();
+
+          setStatus('יוצר שכבת shapes...', 'loading');
+          if (initMode) setStep('יוצר שכבת shapes...');
+          map.removeLayer(shapesLayer);
+          shapesLayer = createShapeTileLayer();
+          if (document.getElementById('toggle-shapes').checked) shapesLayer.addTo(map);
+          updateMemPanel();
+        } else {
+          shapesLayer.clearLayers();
+        }
+
+        if (initMode) setStep('מציג תחנות...');
+        await plotAllStops();
+        if (initMode) setStep('טוען קווים...');
+        await populateRouteSelector();
+        setStatus('נטען מיישירות תחבורה בזמן אמת' + (extracted['shapes.txt'] ? '' : ' (ללא shapes)'), 'ok');
+      } catch (e) {
+        setStatus('שגיאה MOT: ' + e.message.slice(0, 120), 'err');
+        console.error(e);
+        if (initMode) throw e; // bubble up so initDuckDB's .catch() handles it
+      }
+      if (!initMode) { btn.disabled = false; btn.textContent = '⬇ טען מיישירות תחבורה (עדכני)'; }
+    }
+
+    // ── Load from local Parquet snapshot ──────────────────────────────────
+    const PARQUET_BASE = './data/gtfs/';
+    const PARQUET_FILES = ['stops', 'routes', 'trips', 'shapes', 'stop_times',
+                           'calendar', 'translations', 'fare_rules'];
+
+    /** Returns true if the parquet snapshot is available on this server. */
+    async function parquetAvailable() {
+      try {
+        const r = await fetch(PARQUET_BASE + 'stops.parquet', { method: 'HEAD' });
+        return r.ok;
+      } catch { return false; }
+    }
+
+    /** Fetch a binary file with status-bar progress updates. */
+    async function _fetchBuf(filename) {
+      const url = PARQUET_BASE + filename;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${filename}: HTTP ${res.status}`);
+      const total = Number(res.headers.get('content-length') || 0);
+      const reader = res.body.getReader();
+      const chunks = [];
+      let downloaded = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        downloaded += value.length;
+        const mb  = (downloaded / 1e6).toFixed(1);
+        const pct = total ? ` (${Math.round(downloaded / total * 100)}%)` : '';
+        setStatus(`מוריד ${filename}: ${mb} MB${pct}`, 'loading');
+      }
+      const buf = new Uint8Array(downloaded);
+      let off = 0;
+      for (const c of chunks) { buf.set(c, off); off += c.length; }
+      return buf;
+    }
+
+    async function loadFromParquet(initMode = false) {
+      if (!conn) return;
+      const btn = document.getElementById('load-parquet-btn');
+      if (!initMode) { btn.disabled = true; btn.textContent = 'טוען...'; }
+      setStatus('טוען נתוני Parquet...', 'loading');
+
+      try {
+        // ── 1. Fetch & register core parquet files ─────────────────────────
+        // Stop_times is handled separately (build stop_routes inline, then drop)
+        const coreFiles = ['stops', 'routes', 'trips', 'shapes'];
+        for (const name of coreFiles) {
+          const buf = await _fetchBuf(name + '.parquet');
+          await db.registerFileBuffer(name + '.parquet', buf);
+        }
+
+        // ── 2. Create tables ───────────────────────────────────────────────
+        const loadParquet = async (tbl, file) => {
+          setStatus(`יוצר טבלה ${tbl}...`, 'loading');
+          await conn.query(`DROP TABLE IF EXISTS ${tbl}`);
+          await conn.query(`CREATE TABLE ${tbl} AS SELECT * FROM read_parquet('${file}')`);
+        };
+
+        await loadParquet('stops',         'stops.parquet');
+        await loadParquet('routes',        'routes.parquet');
+        await loadParquet('trips',         'trips.parquet');
+        await loadParquet('shapes_sample', 'shapes.parquet');
+
+        // Free core parquet buffers immediately after table creation
+        for (const name of coreFiles)
+          await db.dropFile(name + '.parquet').catch(() => {});
+
+        // ── 3. Build stop_routes from stop_times.parquet (compact) ────────
+        hasStopRoutes = false;
+        setStatus('מוריד stop_times.parquet (≈37 MB)...', 'loading');
+        if (initMode) setStep('מוריד stop_times...');
+        const stBuf = await _fetchBuf('stop_times.parquet');
+        await db.registerFileBuffer('stop_times.parquet', stBuf);
+
+        setStatus('בונה stop_routes (trip אחד לקו)...', 'loading');
+        if (initMode) setStep('בונה stop_routes...');
+
+        // Single query: read parquet inline → only materialise compact result
+        await conn.query(`
+          CREATE OR REPLACE TABLE stop_routes AS
+          SELECT DISTINCT
+            st.stop_id::VARCHAR AS stop_id,
+            rep.route_id
+          FROM read_parquet('stop_times.parquet') AS st
+          JOIN (
+            SELECT route_id::VARCHAR AS route_id,
+                   MIN(trip_id::VARCHAR) AS trip_id
+            FROM trips
+            GROUP BY route_id::VARCHAR
+          ) rep ON rep.trip_id = st.trip_id::VARCHAR
+        `);
+        await db.dropFile('stop_times.parquet').catch(() => {});
+        hasStopRoutes = true;
+
+        // ── 4. Meta ────────────────────────────────────────────────────────
+        const stopCnt       = Number((await conn.query('SELECT COUNT(*) AS n FROM stops' )).toArray()[0].n);
+        const routeCnt      = Number((await conn.query('SELECT COUNT(*) AS n FROM routes')).toArray()[0].n);
+        const stopRoutesCnt = Number((await conn.query('SELECT COUNT(*) AS n FROM stop_routes')).toArray()[0].n);
+        document.getElementById('meta-info').textContent =
+          `${stopCnt.toLocaleString()} תחנות · ${routeCnt.toLocaleString()} קווים · ${stopRoutesCnt.toLocaleString()} stop-route pairs`;
+        document.getElementById('source-badge').textContent    = 'Parquet Snapshot';
+        document.getElementById('source-badge').style.background  = '#0d2b0d';
+        document.getElementById('source-badge').style.color       = '#3fb950';
+        document.getElementById('source-badge').style.borderColor = '#238636';
+
+        // ── 5. Refresh map (same pipeline as MOT) ─────────────────────────
+        stopsLayer.clearLayers();
+        routeHighlightLayer.clearLayers();
+        hasShapeLines = false;
+
+        setStatus('בונה אינדקס shapes...', 'loading');
+        if (initMode) setStep('בונה אינדקס shapes...');
+        await buildShapeIndex();
+
+        if (spatialOk) {
+          setStatus('בונה קווים עם ST_MakeLine...', 'loading');
+          if (initMode) setStep('בונה קווים (ST_MakeLine)...');
+          await buildShapeLines();
+        }
+
+        setStatus('טוען LOD לזיכרון...', 'loading');
+        if (initMode) setStep('טוען LOD לזיכרון...');
+        await buildShapeLods();
+
+        setStatus('יוצר שכבת shapes...', 'loading');
+        if (initMode) setStep('יוצר שכבת shapes...');
+        map.removeLayer(shapesLayer);
+        shapesLayer = createShapeTileLayer();
+        if (document.getElementById('toggle-shapes').checked) shapesLayer.addTo(map);
+        updateMemPanel();
+
+        if (initMode) setStep('מציג תחנות...');
+        await plotAllStops();
+        if (initMode) setStep('טוען קווים...');
+        await populateRouteSelector();
+        setStatus('נטען מ-Parquet Snapshot (ינואר 2025)', 'ok');
+
+      } catch (e) {
+        setStatus('שגיאה Parquet: ' + e.message.slice(0, 120), 'err');
+        console.error(e);
+        if (initMode) throw e;
+      }
+      if (!initMode) { btn.disabled = false; btn.textContent = '⚡ Parquet Snapshot'; }
+    }
+
+    /**
+     * Extract specific files from a ZIP buffer using fflate streaming.
+     * limits: { 'file.txt': maxBytes | null }  — null = full file, number = first N bytes (trimmed to last \n).
+     * onStart(name) called when each file begins decompressing.
+     */
+    function streamExtractZip(zipBuf, limits, onStart = () => { }) {
+      return new Promise((resolve, reject) => {
+        const result = {};
+        const needed = Object.keys(limits);
+        let pending = needed.length;
+
+        const unzipper = new fflate.Unzip();
+        unzipper.register(fflate.UnzipInflate);
+
+        unzipper.onfile = file => {
+          const name = file.name.replace(/^.*\//, '');
+          if (!(name in limits)) { file.ignore = true; return; }
+
+          const maxBytes = limits[name];
+          const fileChunks = [];
+          let fileTotal = 0;
+          let settled = false;
+
+          const finish = (truncate) => {
+            if (settled) return;
+            settled = true;
+            let buf;
+            if (fileChunks.length === 1) {
+              buf = fileChunks[0];
+            } else {
+              buf = new Uint8Array(fileTotal);
+              let o = 0;
+              for (const c of fileChunks) { buf.set(c, o); o += c.length; }
+            }
+            if (truncate) buf = trimBufToLastNewline(buf);
+            result[name] = buf;
+            pending--;
+            if (pending === 0) resolve(result);
+          };
+
+          file.ondata = (err, chunk, final) => {
+            if (settled) return;
+            if (err) { settled = true; reject(err); return; }
+            fileChunks.push(chunk);
+            fileTotal += chunk.length;
+            if (maxBytes !== null && fileTotal >= maxBytes) {
+              try { file.terminate(); } catch (_) { }
+              finish(true);
+              return;
+            }
+            if (final) finish(false);
+          };
+
+          onStart(name);
+          file.start();
+        };
+
+        try {
+          unzipper.push(zipBuf, true);
+          // If some needed files weren't found, resolve with what we have
+          if (pending === 0) resolve(result);
+          // Safety: after pushing all data, resolve missing files as absent
+          setTimeout(() => {
+            if (pending > 0) {
+              console.warn('streamExtractZip: some files not found:', needed.filter(n => !(n in result)));
+              resolve(result);
+            }
+          }, 0);
+        } catch (e) { reject(e); }
+      });
+    }
+
+    function trimBufToLastNewline(buf) {
+      let end = buf.length - 1;
+      while (end > 0 && buf[end] !== 0x0a) end--;
+      return buf.slice(0, end + 1);
+    }
+    document.getElementById('route-select').addEventListener('change', () => {
+      document.getElementById('route-info').innerHTML = '';
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    //  Bootstrap
+    // ═══════════════════════════════════════════════════════════
+
+    buildExamples();
+
+    initDuckDB()
+      .then(() => { if (spatialOk) addSpatialExamples(); })
+      .catch(err => {
+        document.getElementById('init-overlay').style.display = 'none';
+        setStatus('שגיאת אתחול: ' + err.message, 'err');
+        document.getElementById('meta-info').textContent = '❌ ' + err.message;
+        console.error(err);
+      });
+
+  </script>
+</body>
+
+</html>

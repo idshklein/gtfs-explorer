@@ -1,0 +1,36 @@
+name: Daily GTFS → Parquet → Netlify
+
+on:
+  schedule:
+    # Every day at 03:00 UTC (05:00 Israel time, before morning peak)
+    - cron: "0 3 * * *"
+  workflow_dispatch:   # allow manual trigger from GitHub UI
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install gtfs-parquet
+        run: pip install "gtfs-parquet>=0.4.1"
+
+      - name: Download & convert GTFS to Parquet
+        run: python .github/scripts/gtfs_to_parquet.py --zip /tmp/ipt.zip --out data/gtfs
+
+      - name: Install Netlify CLI
+        run: npm install -g netlify-cli
+
+      - name: Deploy to Netlify (production)
+        run: netlify deploy --prod --dir=.
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}

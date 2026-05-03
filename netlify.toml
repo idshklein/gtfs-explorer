@@ -1,0 +1,14 @@
+[build]
+  publish = "."
+  edge_functions = "netlify/edge-functions"
+
+# DuckDB WASM requires SharedArrayBuffer → needs COOP + COEP headers
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cross-Origin-Opener-Policy    = "same-origin"
+    Cross-Origin-Embedder-Policy  = "credentialless"
+
+[[edge_functions]]
+  path     = "/mot-proxy"
+  function = "mot-proxy"

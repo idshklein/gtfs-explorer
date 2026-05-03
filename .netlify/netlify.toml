@@ -1,0 +1,38 @@
+headersOrigin = "config"
+plugins = []
+redirects = []
+
+[build]
+edge_functions = "C:\\Users\\idshk\\uvs\\tahaz\\test_wasm_app\\netlify\\edge-functions"
+publish = "C:\\Users\\idshk\\uvs\\tahaz\\test_wasm_app"
+publishOrigin = "config"
+base = "C:\\Users\\idshk\\uvs\\tahaz\\test_wasm_app"
+
+[build.environment]
+
+[build.processing]
+
+[build.processing.css]
+
+[build.processing.html]
+
+[build.processing.images]
+
+[build.processing.js]
+
+[build.services]
+
+[[edge_functions]]
+path = "/mot-proxy"
+function = "mot-proxy"
+
+[functions]
+
+[functions."*"]
+
+[[headers]]
+for = "/*"
+
+[headers.values]
+Cross-Origin-Opener-Policy = "same-origin"
+Cross-Origin-Embedder-Policy = "credentialless"
