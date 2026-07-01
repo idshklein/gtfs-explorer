@@ -792,7 +792,7 @@ LIMIT 300;</textarea>
 
     async function plotAllStops() {
       const result = await conn.query(`
-    SELECT stop_id, stop_name,
+    SELECT stop_id, stop_name, stop_code,
            stop_lat::DOUBLE AS lat,
            stop_lon::DOUBLE AS lon,
            zone_id
@@ -806,6 +806,7 @@ LIMIT 300;</textarea>
         const lat = Number(row.lat), lon = Number(row.lon);
         if (!lat || !lon) continue;
         const sid = String(row.stop_id ?? '');
+        const code = String(row.stop_code ?? '');
         const name = String(row.stop_name ?? '');
         L.circleMarker([lat, lon], {
           radius: 2.5,
@@ -813,7 +814,7 @@ LIMIT 300;</textarea>
           fillOpacity: 0.5, weight: 0
         }).on('click', e => {
           L.DomEvent.stopPropagation(e);
-          showDetailStop(sid, name, lat, lon);
+          showDetailStop(sid, code, name, lat, lon);
         }).addTo(stopsLayer);
       }
     }
@@ -1279,14 +1280,15 @@ LIMIT 300;</textarea>
 
     document.getElementById('detail-close').addEventListener('click', closeDetailPanel);
 
-    async function showDetailStop(stopId, stopName, lat, lon) {
+    async function showDetailStop(stopId, stopCode, stopName, lat, lon) {
       updateQS({ stop: stopId });
 
       // Fetch routes passing through this stop
       let routesHtml = '<span style="color:var(--muted)">טוען קווים...</span>';
       openDetailPanel(
         `<span style="color:#4fc3f7">🚏</span> ${escHtml(stopName)}` +
-        `<span style="color:var(--muted);font-size:11px;margin-right:8px">תחנה ${escHtml(stopId)}</span>`,
+        `<span style="color:var(--muted);font-size:11px;margin-right:8px">תחנה ${escHtml(stopId)}</span>` +
+        `<span style="color:var(--muted);font-size:11px;margin-right:8px">מקט ${escHtml(stopCode)}</span>`,
         routesHtml
       );
 
